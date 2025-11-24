@@ -5,6 +5,7 @@ Main interface for automating insurance template filling with LLM
 import streamlit as st
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 import logging
 from typing import Optional, Dict
 import tempfile
@@ -78,6 +79,12 @@ def initialize_session_state():
         st.session_state.replacements = None
     if "processing_complete" not in st.session_state:
         st.session_state.processing_complete = False
+    if "awaiting_overrides" not in st.session_state:
+        st.session_state.awaiting_overrides = False
+    if "pending_replacements" not in st.session_state:
+        st.session_state.pending_replacements = None
+    if "last_placeholders" not in st.session_state:
+        st.session_state.last_placeholders = None
 
 
 def validate_api_key(api_key: str) -> bool:
@@ -88,6 +95,9 @@ def validate_api_key(api_key: str) -> bool:
 def main():
     """Main Streamlit application"""
     initialize_session_state()
+    # Load environment variables from .env if present
+    load_dotenv()
+    env_api_key = os.environ.get("GOOGLE_API_KEY", "")
     
     # Header
     st.markdown('<div class="main-header">📋 GLR Pipeline - Insurance Template Filler</div>', 
@@ -104,7 +114,8 @@ def main():
             "Google Gemini API Key",
             type="password",
             help="Get your API key from https://ai.google.dev/",
-            placeholder="Enter your Google Gemini API key"
+            placeholder="Enter your Google Gemini API key",
+            value=env_api_key if env_api_key else ""
         )
         
         if api_key and validate_api_key(api_key):
@@ -216,8 +227,8 @@ def main():
                             st.session_state.processing_complete = True
                             
                         except Exception as e:
-                            st.error(f"Error during processing: {str(e)}")
-                            logger.error(f"Processing error: {e}")
+                            st.error("Error during processing. See logs for details.")
+                            logger.exception("Processing error")
         
         # Show extracted data
         if st.session_state.extracted_data:
@@ -274,31 +285,102 @@ def main():
                                 st.session_state.template_handler.get_placeholders()
                             )
                             st.session_state.replacements = mapper.map_data()
-                            
+
                             # Generate document
+                            # Create a temp output, fill it, then copy to workspace for persistent download
                             with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_output:
-                                output_path = tmp_output.name
-                            
-                            st.session_state.template_handler.fill_and_save(
-                                st.session_state.replacements,
-                                output_path
-                            )
-                            
-                            # Read file for download
-                            with open(output_path, "rb") as f:
+                                tmp_tmp_path = tmp_output.name
+
+                            # Preferred flow: ask the LLM to produce a strict placeholder->value mapping
+                            # then use the original .docx template and `fill_and_save` to preserve formatting.
+                            placeholders = sorted(list(st.session_state.template_handler.get_placeholders()))
+                            try:
+                                llm_for_fill = GeminiLLMHandler(api_key)
+                                llm_mapping = llm_for_fill.generate_placeholder_mapping(placeholders, st.session_state.extracted_data)
+
+                                # Only use LLM mapping values for placeholders that are non-empty; otherwise fall back to our mapper
+                                final_replacements = {}
+                                for ph in placeholders:
+                                    val = llm_mapping.get(ph, "")
+                                    if val is None or val == "":
+                                        val = st.session_state.replacements.get(ph, "")
+                                    final_replacements[ph] = val
+
+                                # If there are empty placeholders, prompt the user to provide overrides before finalizing
+                                empty_placeholders = [p for p, v in final_replacements.items() if not v]
+                                if empty_placeholders:
+                                    st.session_state.pending_replacements = final_replacements
+                                    st.session_state.last_placeholders = placeholders
+                                    st.session_state.awaiting_overrides = True
+                                    st.info("Some placeholders are missing values. Please provide overrides in the 'Provide Missing Values' panel below and click 'Apply overrides and generate final document'.")
+                                    # write mapping report for visibility
+                                    try:
+                                        mapping_report = mapper.get_mapping_report()
+                                        mapping_path = os.path.join(os.getcwd(), "mapping_report.json")
+                                        with open(mapping_path, "w", encoding="utf-8") as mr:
+                                            json.dump(mapping_report, mr, indent=2)
+                                    except Exception:
+                                        pass
+                                else:
+                                    # Fill using the original docx to preserve layout and formatting
+                                    st.session_state.template_handler.fill_and_save(final_replacements, tmp_tmp_path)
+                            except Exception as e:
+                                logger.error(f"LLM placeholder-mapping failed: {e}. Falling back to local replacements.")
+                                st.session_state.template_handler.fill_and_save(
+                                    st.session_state.replacements,
+                                    tmp_tmp_path
+                                )
+
+                            # Save mapping report for inspection
+                            try:
+                                mapping_report = mapper.get_mapping_report()
+                                mapping_path = os.path.join(os.getcwd(), "mapping_report.json")
+                                with open(mapping_path, "w", encoding="utf-8") as mr:
+                                    json.dump(mapping_report, mr, indent=2)
+                                logger.info(f"Mapping report saved to {mapping_path}")
+                            except Exception as e:
+                                logger.error(f"Failed to write mapping report: {e}")
+
+                            # Copy the temp filled doc to a persistent location in the workspace
+                            workspace_output = os.path.join(os.getcwd(), "Completed_GLR_Report.docx")
+                            try:
+                                import shutil
+                                shutil.copyfile(tmp_tmp_path, workspace_output)
+                            except Exception as e:
+                                logger.error(f"Failed to copy filled document to workspace: {e}")
+
+                            # Read the workspace file for download
+                            with open(workspace_output, "rb") as f:
                                 file_data = f.read()
-                            
-                            st.success("✓ Document generated successfully!")
-                            
-                            # Download button
+
+                            st.success("✓ Document generated successfully! Saved to workspace")
+
+                            # Download button (serves the workspace copy)
                             st.download_button(
                                 label="📥 Download Filled Document",
                                 data=file_data,
                                 file_name="Completed_GLR_Report.docx",
                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                             )
-                            
-                            os.unlink(output_path)
+
+                            # Offer mapping report download
+                            try:
+                                with open(mapping_path, "rb") as mr:
+                                    mapping_bytes = mr.read()
+                                st.download_button(
+                                    label="📄 Download Mapping Report (JSON)",
+                                    data=mapping_bytes,
+                                    file_name="mapping_report.json",
+                                    mime="application/json"
+                                )
+                            except Exception:
+                                pass
+
+                            # Clean up temp file
+                            try:
+                                os.unlink(tmp_tmp_path)
+                            except Exception:
+                                pass
                             
                         except Exception as e:
                             st.error(f"Error generating document: {str(e)}")
@@ -308,6 +390,73 @@ def main():
                 if st.button("🔍 View Mapping Report", key="report_btn"):
                     if st.session_state.replacements:
                         st.json(st.session_state.replacements)
+
+            # Render manual override form if the mapping left placeholders empty
+            if st.session_state.awaiting_overrides and st.session_state.pending_replacements:
+                st.markdown("### ✍️ Provide Missing Values")
+                with st.form("overrides_form"):
+                    override_inputs = {}
+                    for ph, val in sorted(st.session_state.pending_replacements.items()):
+                        # show input for placeholders that are empty (but allow editing any)
+                        display_val = val if val is not None else ""
+                        if not display_val:
+                            override_inputs[ph] = st.text_input(f"{ph}", value="", key=f"override_{ph}")
+                        else:
+                            # still allow user to correct values if desired
+                            override_inputs[ph] = st.text_input(f"{ph}", value=display_val, key=f"override_{ph}")
+
+                    submitted = st.form_submit_button("Apply overrides and generate final document")
+
+                if submitted:
+                    # Merge overrides into pending_replacements
+                    for ph in override_inputs:
+                        st.session_state.pending_replacements[ph] = override_inputs[ph]
+
+                    # Perform final fill and save
+                    try:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_output2:
+                            tmp_out_path = tmp_output2.name
+
+                        st.session_state.template_handler.fill_and_save(st.session_state.pending_replacements, tmp_out_path)
+
+                        # Save mapping report
+                        try:
+                            mapping_report = mapper.get_mapping_report()
+                            mapping_path = os.path.join(os.getcwd(), "mapping_report.json")
+                            with open(mapping_path, "w", encoding="utf-8") as mr:
+                                json.dump(mapping_report, mr, indent=2)
+                        except Exception:
+                            pass
+
+                        # Copy to workspace
+                        workspace_output = os.path.join(os.getcwd(), "Completed_GLR_Report.docx")
+                        import shutil
+                        shutil.copyfile(tmp_out_path, workspace_output)
+
+                        # Offer download
+                        with open(workspace_output, "rb") as f:
+                            file_data = f.read()
+
+                        st.success("✓ Document generated with overrides and saved to workspace")
+                        st.download_button(
+                            label="📥 Download Filled Document",
+                            data=file_data,
+                            file_name="Completed_GLR_Report.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
+
+                        # Clear override state
+                        st.session_state.awaiting_overrides = False
+                        st.session_state.pending_replacements = None
+                        st.session_state.last_placeholders = None
+
+                        # cleanup
+                        try:
+                            os.unlink(tmp_out_path)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        st.error(f"Error applying overrides and generating document: {e}")
     
     else:
         st.info("⏳ Please upload both template and photo report(s) to proceed")

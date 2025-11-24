@@ -161,3 +161,24 @@ class DocxTemplateHandler:
             Dictionary with all placeholders as keys and empty strings as values
         """
         return {placeholder: "" for placeholder in sorted(self.placeholders)}
+
+    def get_template_text(self) -> str:
+        """
+        Return the template content as plain text with placeholders preserved.
+        This is useful when we want to generate a filled document from plain text.
+        """
+        parts = []
+        for paragraph in self.document.paragraphs:
+            parts.append(paragraph.text)
+
+        # Include tables as text blocks
+        for table in self.document.tables:
+            for row in table.rows:
+                row_text = []
+                for cell in row.cells:
+                    # join cell paragraphs
+                    cell_text = "\n".join([p.text for p in cell.paragraphs if p.text])
+                    row_text.append(cell_text)
+                parts.append(" | ".join(row_text))
+
+        return "\n\n".join(parts)
