@@ -27,7 +27,7 @@ class GeminiLLMHandler:
         """
         genai.configure(api_key=api_key)
         # Allow overriding model via env var `GLR_LLM_MODEL`, fallback to a supported model
-        default_model = os.environ.get("GLR_LLM_MODEL", "gemini-2.5-pro")
+        default_model = os.environ.get("GLR_LLM_MODEL", "gemini-2.5-flash")
         self.model_name = default_model
         self.model = genai.GenerativeModel(self.model_name)
         logger.info(f"Gemini LLM initialized using model: {self.model_name}")

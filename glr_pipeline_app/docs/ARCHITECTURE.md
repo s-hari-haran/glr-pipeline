@@ -136,7 +136,7 @@ extract_structured_content(pdf_path: str) -> Dict
 ```python
 __init__(api_key: str)
     Initialize with Google Gemini API key
-    Configure model: 'gemini-pro'
+    Configure model: 'gemini-2.5-flash'
 
 extract_insurance_data(photo_report_text: str) -> Dict
     Extract structured data from photo report text
@@ -361,7 +361,7 @@ Deep copy template before modification:
 
 ### Google Gemini API
 
-**Model Used:** `gemini-pro`
+**Model Used:** `gemini-2.5-flash`
 
 **Prompting Approach:**
 

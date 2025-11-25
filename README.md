@@ -49,12 +49,12 @@ Requirements & environment
 python3 -m pip install -r requirements.txt
 ```
 
-- Add your Google Generative AI API key in a `.env` file at the repository root:
+Add your Google Generative AI API key in a `.env` file at the repository root:
 
 ```env
 GOOGLE_API_KEY=your_api_key_here
-# Optional: override the model
-GLR_LLM_MODEL=gemini-2.5-pro
+# Optional: override the model (default: gemini-2.5-flash)
+GLR_LLM_MODEL=gemini-2.5-flash
 ```
 
 Running the Streamlit app
