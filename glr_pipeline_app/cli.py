@@ -91,6 +91,20 @@ Examples:
         print("\n📋 Step 3: Processing template...")
         template_handler = DocxTemplateHandler(str(template_path))
         placeholders = template_handler.get_placeholders()
+        # If we have an API key, attempt LLM-based placeholder extraction for templates
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if api_key:
+            try:
+                llm = GeminiLLMHandler(api_key)
+                template_text = template_handler.get_template_text()
+                llm_placeholders = llm.extract_template_placeholders(template_text)
+                if llm_placeholders:
+                    print(f"✓ LLM returned {len(llm_placeholders)} template placeholders; using LLM placeholders")
+                    placeholders = set([p.upper().strip() for p in llm_placeholders if p])
+                else:
+                    print("ℹ️ LLM didn't return placeholders; falling back to template detection.")
+            except Exception as e:
+                print(f"ℹ️ LLM placeholder extraction failed: {e}. Using template detection.")
         print(f"✓ Found {len(placeholders)} placeholders in template")
         print(f"  Placeholders: {', '.join(list(placeholders)[:5])}{'...' if len(placeholders) > 5 else ''}")
         

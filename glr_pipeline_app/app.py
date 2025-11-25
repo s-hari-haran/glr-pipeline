@@ -162,10 +162,33 @@ def main():
                 st.session_state.template_handler = DocxTemplateHandler(tmp_template_path)
                 st.success(f"✓ Template loaded successfully")
                 
+                # Attempt to extract placeholders via LLM (if API key provided); otherwise fallback to local regex
+                placeholders = sorted(st.session_state.template_handler.get_placeholders())
+                # If API key is provided, call the LLM to extract placeholders from the template text
+                if st.session_state.api_key_set:
+                    try:
+                        llm = GeminiLLMHandler(api_key)
+                        template_text = st.session_state.template_handler.get_template_text()
+                        llm_placeholders = llm.extract_template_placeholders(template_text)
+                        # Normalize
+                        llm_placeholders = sorted({p.upper().strip() for p in llm_placeholders if p})
+                        if llm_placeholders:
+                            placeholders = llm_placeholders
+                            st.info("Placeholders extracted via LLM")
+                        else:
+                            st.info("LLM did not extract placeholders; using template detection as fallback")
+                    except Exception as e:
+                        logger.error(f"Error invoking LLM placeholder extraction: {e}")
+                        st.info("LLM placeholder extraction failed; using template detection as fallback")
+
                 with st.expander("View Template Placeholders"):
-                    placeholders = sorted(st.session_state.template_handler.get_placeholders())
                     st.write(f"**Found {len(placeholders)} placeholder(s):**")
                     st.code("\n".join([f"[{p}]" for p in placeholders]))
+                    # update the in-memory placeholders set so downstream code uses the LLM-based placeholders
+                    try:
+                        st.session_state.template_handler.placeholders = set(placeholders)
+                    except Exception:
+                        pass
             except Exception as e:
                 st.error(f"Error loading template: {str(e)}")
                 st.session_state.template_handler = None

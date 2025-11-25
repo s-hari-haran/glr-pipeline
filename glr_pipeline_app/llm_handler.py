@@ -379,3 +379,69 @@ class GeminiLLMHandler:
         except Exception as e:
             logger.error(f"Error generating placeholder mapping via LLM: {e}")
             return {p: "" for p in placeholders}
+
+    def extract_template_placeholders(self, template_text: str) -> List[str]:
+        """
+        Ask the LLM to extract placeholders from a template text. The LLM must return
+        a JSON array of placeholder names (without brackets). For example: ["INSURED_NAME", "POLICY_NUMBER"].
+        If the LLM cannot recover a list, return an empty list.
+        """
+        if not template_text:
+            return []
+
+        prompt_t = Template(
+            """
+            You are an assistant that reads a document template and returns the list of placeholders used.
+            The template contains tokens enclosed in brackets, like [INSURED_NAME] or [DATE_INSPECTED].
+            Please return ONLY a JSON array of placeholder names (without brackets) in uppercase.
+
+            Template:
+            $template_text
+            """
+        )
+
+        prompt = prompt_t.substitute(template_text=template_text)
+
+        try:
+            response = self.model.generate_content(prompt)
+            response_text = (response.text or "").strip()
+            # strip code fences
+            if response_text.startswith("```json"):
+                response_text = response_text.replace("```json", "").replace("```", "").strip()
+            elif response_text.startswith("```"):
+                response_text = response_text.replace("```", "").strip()
+
+            # try to parse as JSON array
+            try:
+                arr = json.loads(response_text)
+                if isinstance(arr, list):
+                    cleaned = [str(a).upper().strip().strip('[]') for a in arr if a]
+                    logger.info("LLM extracted placeholders from template")
+                    return cleaned
+            except json.JSONDecodeError:
+                # attempt to extract JSON substring
+                candidate = self._extract_json_from_text(response_text)
+                if candidate:
+                    try:
+                        arr = json.loads(candidate)
+                        if isinstance(arr, list):
+                            cleaned = [str(a).upper().strip().strip('[]') for a in arr if a]
+                            logger.info("Parsed placeholders from JSON substring")
+                            return cleaned
+                    except Exception:
+                        logger.debug("Failed to parse candidate JSON list for placeholders")
+
+            # If not JSON, try to parse bracketed placeholders from text output
+            # find all tokens that look like [NAME]
+            import re
+            matches = re.findall(r"\[([A-Za-z0-9_]+)\]", response_text)
+            if matches:
+                cleaned = [m.upper().strip() for m in matches]
+                logger.info("Found placeholders by regex on LLM response")
+                return cleaned
+
+            logger.warning("LLM could not determine placeholders")
+            return []
+        except Exception as e:
+            logger.error(f"Error extracting placeholders with LLM: {e}")
+            return []

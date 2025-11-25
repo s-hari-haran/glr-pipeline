@@ -73,6 +73,16 @@ def main():
     # Load template handler
     th = DocxTemplateHandler(template_path)
 
+    # Try LLM-based placeholder extraction for testing
+    try:
+        placeholders = sorted(list(th.get_placeholders()))
+        llm_placeholders = llm.extract_template_placeholders(th.get_template_text())
+        print('LLM placeholders (extracted):', llm_placeholders)
+        if llm_placeholders:
+            placeholders = llm_placeholders
+    except Exception as e:
+        print('LLM placeholder extraction failed:', e)
+
     mapper = DataMapper(extracted, th.get_placeholders())
     replacements = mapper.map_data()
     report = mapper.get_mapping_report()
