@@ -18,13 +18,22 @@ logger = logging.getLogger(__name__)
 class GeminiLLMHandler:
     """Handles all interactions with Google Gemini LLM"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: Optional[str] = None):
         """
         Initialize Gemini API handler.
         
         Args:
             api_key: Google Generative AI API key
         """
+        # If no API key provided, initialize in 'disabled' mode where LLM is not called
+        self.api_key = api_key
+        self.disabled = False
+        if not api_key:
+            logger.info("Gemini LLM initialized in disabled mode (no API key provided)")
+            self.disabled = True
+            self.model_name = os.environ.get("GLR_LLM_MODEL", "gemini-2.5-flash")
+            self.model = None
+            return
         genai.configure(api_key=api_key)
         # Allow overriding model via env var `GLR_LLM_MODEL`, fallback to a supported model
         default_model = os.environ.get("GLR_LLM_MODEL", "gemini-2.5-flash")
@@ -41,6 +50,9 @@ class GeminiLLMHandler:
         while True:
             attempt += 1
             try:
+                if not self.model:
+                    # LLM disabled; explicit error to trigger fallbacks upstream
+                    raise RuntimeError("LLM is disabled (no API key).")
                 response = self.model.generate_content(prompt)
                 return response
             except Exception as e:
@@ -204,153 +216,82 @@ class GeminiLLMHandler:
             "additional_notes": response_text
         }
         return result
-        def _simple_text_extract(self, text: str, placeholders: Optional[List[str]] = None) -> Dict:
-            """
-            Basic heuristic extraction for times when the LLM call fails (rate limits, quota).
-            Extracts insured_name, policy_number, claim_number, date_inspected, and risk_address heuristically.
-            """
-            # Very simple heuristics using regex for common patterns
-            import re
 
-            res = {
-                "insured_name": None,
-                "policy_number": None,
-                "claim_number": None,
-                "mortgage_company": None,
-                "date_of_loss": None,
-                "date_inspected": None,
-                "risk_address": None,
-                "address_street": None,
-                "address_city": None,
-                "address_state": None,
-                "address_zip": None,
-                "dwelling_type": None,
-                "roof_material": None,
-                "roof_age": None,
-                "roof_pitch": None,
-                "roof_condition": None,
-                "front_elevation_damage": None,
-                "right_elevation_damage": None,
-                "rear_elevation_damage": None,
-                "left_elevation_damage": None,
-                "interior_damage": None,
-                "type_of_loss": None,
-                "damage_summary": None,
-                "additional_notes": text
-            }
-            # track that this result was via local fallback heuristics
-            res["_llm_fallback"] = True
+    def _simple_text_extract(self, text: str, placeholders: Optional[List[str]] = None) -> Dict:
+        """
+        Basic heuristic extraction for times when the LLM call fails (rate limits, quota).
+        Extracts insured_name, policy_number, claim_number, date_inspected, and risk_address heuristically.
+        """
+        # Very simple heuristics using regex for common patterns
+        import re
 
-            # Extract name lines like 'Insured: <name>'
-            m = re.search(r"Insured:\s*(.+)", text, re.IGNORECASE)
-            if m:
-                res["insured_name"] = m.group(1).strip()
+        res = {
+            "insured_name": None,
+            "policy_number": None,
+            "claim_number": None,
+            "mortgage_company": None,
+            "date_of_loss": None,
+            "date_inspected": None,
+            "risk_address": None,
+            "address_street": None,
+            "address_city": None,
+            "address_state": None,
+            "address_zip": None,
+            "dwelling_type": None,
+            "roof_material": None,
+            "roof_age": None,
+            "roof_pitch": None,
+            "roof_condition": None,
+            "front_elevation_damage": None,
+            "right_elevation_damage": None,
+            "rear_elevation_damage": None,
+            "left_elevation_damage": None,
+            "interior_damage": None,
+            "type_of_loss": None,
+            "damage_summary": None,
+            "additional_notes": text
+        }
 
-            # Policy numbers often appear as 'Policy #: 12345' or 'Policy #:'
-            m = re.search(r"Policy\s*#[:]?\s*([A-Z0-9-]+)", text, re.IGNORECASE)
-            if m:
-                res["policy_number"] = m.group(1).strip()
+        # Extract name lines like 'Insured: <name>'
+        m = re.search(r"Insured:\s*(.+)", text, re.IGNORECASE)
+        if m:
+            res["insured_name"] = m.group(1).strip()
 
-            # Claim number common labels
-            m = re.search(r"Claim\s*#[:]?\s*([A-Z0-9-]+)", text, re.IGNORECASE)
-            if m:
-                res["claim_number"] = m.group(1).strip()
+        # Policy numbers often appear as 'Policy #: 12345' or 'Policy #:'
+        m = re.search(r"Policy\s*#[:]?\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+        if m:
+            res["policy_number"] = m.group(1).strip()
 
-            # Date patterns mm/dd/yyyy or yyyy-mm-dd
-            m = re.search(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", text)
-            if m:
-                res["date_inspected"] = m.group(1)
+        # Claim number common labels
+        m = re.search(r"Claim\s*#[:]?\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+        if m:
+            res["claim_number"] = m.group(1).strip()
 
-            # Address lines: 'Risk address' or similar
-            m = re.search(r"Risk address\s*[:\-]?\s*(.+)", text, re.IGNORECASE)
-            if m:
-                addr = m.group(1).strip()
-                res["risk_address"] = addr
-            # fallback: find street + city/state/zip lines
-            m = re.search(r"(\d+\s+[^,\n]+),\s*([A-Za-z\s]+),\s*([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?", text)
-            if m:
-                res["address_street"] = m.group(1).strip()
-                res["address_city"] = m.group(2).strip()
-                res["address_state"] = m.group(3).strip()
-                res["address_zip"] = m.group(4) if m.group(4) else None
+        # Date patterns mm/dd/yyyy or yyyy-mm-dd
+        m = re.search(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", text)
+        if m:
+            res["date_inspected"] = m.group(1)
 
-            # Return only placeholders if requested, else all
-            if placeholders:
-                return {p: res.get(p.lower(), None) for p in placeholders}
-            return res
+        # Address lines: 'Risk address' or similar
+        m = re.search(r"Risk address\s*[:\-]?\s*(.+)", text, re.IGNORECASE)
+        if m:
+            addr = m.group(1).strip()
+            res["risk_address"] = addr
+        # fallback: find street + city/state/zip lines
+        m = re.search(r"(\d+\s+[^,\n]+),\s*([A-Za-z\s]+),\s*([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?", text)
+        if m:
+            res["address_street"] = m.group(1).strip()
+            res["address_city"] = m.group(2).strip()
+            res["address_state"] = m.group(3).strip()
+            res["address_zip"] = m.group(4) if m.group(4) else None
 
-        def _simple_text_extract(self, text: str, placeholders: Optional[List[str]] = None) -> Dict:
-            """
-            Basic heuristic extraction for times when the LLM call fails (rate limits, quota).
-            Extracts insured_name, policy_number, claim_number, date_inspected, and risk_address heuristically.
-            """
-            # Very simple heuristics using regex for common patterns
-            import re
+        # track that this result was via local fallback heuristics
+        res["_llm_fallback"] = True
 
-            res = {
-                "insured_name": None,
-                "policy_number": None,
-                "claim_number": None,
-                "mortgage_company": None,
-                "date_of_loss": None,
-                "date_inspected": None,
-                "risk_address": None,
-                "address_street": None,
-                "address_city": None,
-                "address_state": None,
-                "address_zip": None,
-                "dwelling_type": None,
-                "roof_material": None,
-                "roof_age": None,
-                "roof_pitch": None,
-                "roof_condition": None,
-                "front_elevation_damage": None,
-                "right_elevation_damage": None,
-                "rear_elevation_damage": None,
-                "left_elevation_damage": None,
-                "interior_damage": None,
-                "type_of_loss": None,
-                "damage_summary": None,
-                "additional_notes": text
-            }
-
-            # Extract name lines like 'Insured: <name>'
-            m = re.search(r"Insured:\s*(.+)", re.IGNORECASE)
-            if m:
-                res["insured_name"] = m.group(1).strip()
-
-            # Policy numbers often appear as 'Policy #: 12345' or 'Policy #:'
-            m = re.search(r"Policy\s*#[:]?\s*([A-Z0-9-]+)", text, re.IGNORECASE)
-            if m:
-                res["policy_number"] = m.group(1).strip()
-
-            # Claim number common labels
-            m = re.search(r"Claim\s*#[:]?\s*([A-Z0-9-]+)", text, re.IGNORECASE)
-            if m:
-                res["claim_number"] = m.group(1).strip()
-
-            # Date patterns mm/dd/yyyy or yyyy-mm-dd
-            m = re.search(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", text)
-            if m:
-                res["date_inspected"] = m.group(1)
-
-            # Address lines: 'Risk address' or similar
-            m = re.search(r"Risk address\s*[:\-]?\s*(.+)", text, re.IGNORECASE)
-            if m:
-                addr = m.group(1).strip()
-                res["risk_address"] = addr
-            # fallback: find street + city/state/zip lines
-            m = re.search(r"(\d+\s+[^,\n]+),\s*([A-Za-z\s]+),\s*([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?", text)
-            if m:
-                res["address_street"] = m.group(1).strip()
-                res["address_city"] = m.group(2).strip()
-                res["address_state"] = m.group(3).strip()
-                res["address_zip"] = m.group(4) if m.group(4) else None
-
-            # Return only placeholders if requested, else all
-            if placeholders:
-                return {p: res.get(p.lower(), None) for p in placeholders}
-            return res
+        # Return only placeholders if requested, else all
+        if placeholders:
+            return {p: res.get(p.lower(), None) for p in placeholders}
+        return res
 
     def _extract_json_from_text(self, text: str) -> Optional[str]:
         """Try to find a JSON object within arbitrary text.

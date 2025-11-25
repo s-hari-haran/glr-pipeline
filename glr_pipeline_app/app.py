@@ -85,6 +85,8 @@ def initialize_session_state():
         st.session_state.pending_replacements = None
     if "last_placeholders" not in st.session_state:
         st.session_state.last_placeholders = None
+    if "heuristics_only" not in st.session_state:
+        st.session_state.heuristics_only = False
 
 
 def validate_api_key(api_key: str) -> bool:
@@ -124,6 +126,10 @@ def main():
         else:
             st.session_state.api_key_set = False
             st.warning("⚠️ API key required to proceed")
+        st.markdown("---")
+        # Allow users to run the app in heuristic-only mode when no API key is available
+        heuristics_only = st.checkbox("Heuristics-only mode (no API key required)", value=False)
+        st.session_state.heuristics_only = heuristics_only
         
         st.markdown("---")
         st.markdown("### About")
@@ -218,8 +224,8 @@ def main():
         
         with col1:
             if st.button("🚀 Process & Extract Data", key="process_btn"):
-                if not st.session_state.api_key_set:
-                    st.error("❌ Please configure your API key in the sidebar first")
+                if not st.session_state.api_key_set and not st.session_state.heuristics_only:
+                    st.error("❌ Please configure your API key or enable heuristics-only mode in the sidebar first")
                 else:
                     with st.spinner("Processing photo reports..."):
                         try:
@@ -238,7 +244,8 @@ def main():
                             
                             # Use LLM to extract data
                             with st.spinner("Analyzing with AI..."):
-                                llm = GeminiLLMHandler(api_key)
+                                # Create LLM handler - if heuristics-only mode, instantiate without an API key
+                                llm = GeminiLLMHandler(api_key if st.session_state.api_key_set else None)
                                 # Prefer to pass the placeholders list to the LLM so it extracts only needed keys
                                 placeholders_for_extraction = None
                                 try:
@@ -246,7 +253,15 @@ def main():
                                 except Exception:
                                     placeholders_for_extraction = None
                                 try:
-                                    st.session_state.extracted_data = llm.extract_insurance_data(combined_text, placeholders_for_extraction)
+                                    try:
+                                        st.session_state.extracted_data = llm.extract_insurance_data(combined_text, placeholders_for_extraction)
+                                    except Exception as e:
+                                        # If LLM disabled or fails, try local heuristics fallback
+                                        logger.info(f"LLM extraction failed or disabled ({e}). Using heuristics fallback.")
+                                        try:
+                                            st.session_state.extracted_data = llm._simple_text_extract(combined_text, placeholders_for_extraction)
+                                        except Exception:
+                                            st.session_state.extracted_data = {}
                                     # If extraction used LLM fallback heuristics, note it in the UI
                                     if isinstance(st.session_state.extracted_data, dict) and st.session_state.extracted_data.get('_llm_fallback'):
                                         st.session_state.llm_fallback = True
@@ -263,7 +278,10 @@ def main():
                                 
                                 # Generate narratives
                                 with st.spinner("Generating narrative text..."):
-                                    narratives = llm.generate_narrative(st.session_state.extracted_data)
+                                    try:
+                                        narratives = llm.generate_narrative(st.session_state.extracted_data)
+                                    except Exception:
+                                        narratives = {}
                                     st.session_state.extracted_data.update(narratives)
                             
                             st.success("✓ Data extraction complete!")
@@ -340,7 +358,7 @@ def main():
                             # then use the original .docx template and `fill_and_save` to preserve formatting.
                             placeholders = sorted(list(st.session_state.template_handler.get_placeholders()))
                             try:
-                                llm_for_fill = GeminiLLMHandler(api_key)
+                                llm_for_fill = GeminiLLMHandler(api_key if st.session_state.api_key_set else None)
                                 llm_mapping = llm_for_fill.generate_placeholder_mapping(placeholders, st.session_state.extracted_data)
 
                                 # Only use LLM mapping values for placeholders that are non-empty; otherwise fall back to our mapper
