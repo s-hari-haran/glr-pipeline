@@ -78,12 +78,35 @@ def main():
 
     # Use placeholders to focus LLM extraction of structured data
     print('Extracting data from photo report (focused on placeholders)...')
-    extracted = llm.extract_insurance_data(example_text, placeholders)
+    try:
+        extracted = llm.extract_insurance_data(example_text, placeholders)
+    except Exception as e:
+        print('LLM focused extraction failed:', e)
+        print('Retrying with general extraction...')
+        try:
+            extracted = llm.extract_insurance_data(example_text)
+        except Exception as e2:
+            print('LLM general extraction also failed:', e2)
+            print('Falling back to empty extraction result')
+            extracted = {}
+        except Exception as e:
+            print('LLM focused extraction failed:', e)
+            print('Retrying with general extraction...')
+            try:
+                extracted = llm.extract_insurance_data(example_text)
+            except Exception as e2:
+                print('LLM general extraction also failed:', e2)
+                print('Falling back to empty extraction result')
+                extracted = {}
     print('Extracted keys:', list(extracted.keys()))
 
     print('Generating narratives...')
-    narratives = llm.generate_narrative(extracted)
-    extracted.update(narratives)
+    try:
+        narratives = llm.generate_narrative(extracted)
+        extracted.update(narratives)
+    except Exception as e:
+        print('LLM narrative generation failed:', e)
+        narratives = {}
 
     # Try LLM-based placeholder extraction for testing
     try:

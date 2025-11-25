@@ -53,12 +53,12 @@ def check_env_file():
 def check_modules():
     """Check custom module files"""
     modules = [
-        'pdf_extractor.py',
-        'llm_handler.py',
-        'template_handler.py',
-        'data_mapper.py',
-        'cli.py',
-        'app.py'
+        'glr_pipeline_app/pdf_extractor.py',
+        'glr_pipeline_app/llm_handler.py',
+        'glr_pipeline_app/template_handler.py',
+        'glr_pipeline_app/data_mapper.py',
+        'glr_pipeline_app/cli.py',
+        'glr_pipeline_app/app.py'
     ]
     
     all_ok = True
