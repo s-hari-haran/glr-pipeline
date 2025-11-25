@@ -245,7 +245,21 @@ def main():
                                     placeholders_for_extraction = sorted(list(st.session_state.template_handler.get_placeholders()))
                                 except Exception:
                                     placeholders_for_extraction = None
-                                st.session_state.extracted_data = llm.extract_insurance_data(combined_text, placeholders_for_extraction)
+                                try:
+                                    st.session_state.extracted_data = llm.extract_insurance_data(combined_text, placeholders_for_extraction)
+                                    # If extraction used LLM fallback heuristics, note it in the UI
+                                    if isinstance(st.session_state.extracted_data, dict) and st.session_state.extracted_data.get('_llm_fallback'):
+                                        st.session_state.llm_fallback = True
+                                        # cleanup this helper key
+                                        st.session_state.extracted_data.pop('_llm_fallback', None)
+                                except Exception as e:
+                                    logger.warning(f"LLM extraction with placeholders failed ({e}), retrying without placeholders")
+                                    # Fallback: call extraction without placeholders
+                                    try:
+                                        st.session_state.extracted_data = llm.extract_insurance_data(combined_text, None)
+                                    except Exception as e2:
+                                        logger.error(f"LLM extraction failed: {e2}")
+                                        raise
                                 
                                 # Generate narratives
                                 with st.spinner("Generating narrative text..."):
@@ -253,6 +267,8 @@ def main():
                                     st.session_state.extracted_data.update(narratives)
                             
                             st.success("✓ Data extraction complete!")
+                            if st.session_state.llm_fallback:
+                                st.warning("⚠️ LLM unavailable or rate-limited; using local heuristics as fallback. Some fields may be missing or approximated.")
                             st.session_state.processing_complete = True
                             
                         except Exception as e:

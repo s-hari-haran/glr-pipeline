@@ -9,6 +9,7 @@ import re
 import os
 from typing import Dict, List, Optional
 from string import Template
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,6 +31,30 @@ class GeminiLLMHandler:
         self.model_name = default_model
         self.model = genai.GenerativeModel(self.model_name)
         logger.info(f"Gemini LLM initialized using model: {self.model_name}")
+
+    def _call_model(self, prompt: str, max_retries: int = 3, backoff_seconds: float = 2.0):
+        """
+        Helper to call the Gemini model with retry/backoff on rate limit or transient errors.
+        Returns the response from self.model.generate_content() or raises the last exception.
+        """
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                response = self.model.generate_content(prompt)
+                return response
+            except Exception as e:
+                # If it's clearly a quota error or transient, retry with backoff.
+                msg = str(e)
+                if "429" in msg or "quota" in msg.lower() or "rate-limit" in msg.lower() or "rate limit" in msg.lower():
+                    if attempt <= max_retries:
+                        wait = backoff_seconds * (2 ** (attempt - 1))
+                        logger.warning(f"LLM rate-limited (attempt {attempt}/{max_retries}). Retrying in {wait:.1f}s")
+                        time.sleep(wait)
+                        continue
+                # Non-retryable or max retries exhausted
+                logger.error(f"LLM call failed (attempt {attempt}): {e}")
+                raise
     
     def extract_insurance_data(self, photo_report_text: str, placeholders: Optional[List[str]] = None) -> Dict:
         """
@@ -101,7 +126,7 @@ class GeminiLLMHandler:
             prompt = prompt_t.substitute(text=safe_text)
         
         try:
-            response = self.model.generate_content(prompt)
+            response = self._call_model(prompt)
             response_text = response.text or ""
             response_text = response_text.strip()
 
@@ -179,6 +204,153 @@ class GeminiLLMHandler:
             "additional_notes": response_text
         }
         return result
+        def _simple_text_extract(self, text: str, placeholders: Optional[List[str]] = None) -> Dict:
+            """
+            Basic heuristic extraction for times when the LLM call fails (rate limits, quota).
+            Extracts insured_name, policy_number, claim_number, date_inspected, and risk_address heuristically.
+            """
+            # Very simple heuristics using regex for common patterns
+            import re
+
+            res = {
+                "insured_name": None,
+                "policy_number": None,
+                "claim_number": None,
+                "mortgage_company": None,
+                "date_of_loss": None,
+                "date_inspected": None,
+                "risk_address": None,
+                "address_street": None,
+                "address_city": None,
+                "address_state": None,
+                "address_zip": None,
+                "dwelling_type": None,
+                "roof_material": None,
+                "roof_age": None,
+                "roof_pitch": None,
+                "roof_condition": None,
+                "front_elevation_damage": None,
+                "right_elevation_damage": None,
+                "rear_elevation_damage": None,
+                "left_elevation_damage": None,
+                "interior_damage": None,
+                "type_of_loss": None,
+                "damage_summary": None,
+                "additional_notes": text
+            }
+            # track that this result was via local fallback heuristics
+            res["_llm_fallback"] = True
+
+            # Extract name lines like 'Insured: <name>'
+            m = re.search(r"Insured:\s*(.+)", text, re.IGNORECASE)
+            if m:
+                res["insured_name"] = m.group(1).strip()
+
+            # Policy numbers often appear as 'Policy #: 12345' or 'Policy #:'
+            m = re.search(r"Policy\s*#[:]?\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+            if m:
+                res["policy_number"] = m.group(1).strip()
+
+            # Claim number common labels
+            m = re.search(r"Claim\s*#[:]?\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+            if m:
+                res["claim_number"] = m.group(1).strip()
+
+            # Date patterns mm/dd/yyyy or yyyy-mm-dd
+            m = re.search(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", text)
+            if m:
+                res["date_inspected"] = m.group(1)
+
+            # Address lines: 'Risk address' or similar
+            m = re.search(r"Risk address\s*[:\-]?\s*(.+)", text, re.IGNORECASE)
+            if m:
+                addr = m.group(1).strip()
+                res["risk_address"] = addr
+            # fallback: find street + city/state/zip lines
+            m = re.search(r"(\d+\s+[^,\n]+),\s*([A-Za-z\s]+),\s*([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?", text)
+            if m:
+                res["address_street"] = m.group(1).strip()
+                res["address_city"] = m.group(2).strip()
+                res["address_state"] = m.group(3).strip()
+                res["address_zip"] = m.group(4) if m.group(4) else None
+
+            # Return only placeholders if requested, else all
+            if placeholders:
+                return {p: res.get(p.lower(), None) for p in placeholders}
+            return res
+
+        def _simple_text_extract(self, text: str, placeholders: Optional[List[str]] = None) -> Dict:
+            """
+            Basic heuristic extraction for times when the LLM call fails (rate limits, quota).
+            Extracts insured_name, policy_number, claim_number, date_inspected, and risk_address heuristically.
+            """
+            # Very simple heuristics using regex for common patterns
+            import re
+
+            res = {
+                "insured_name": None,
+                "policy_number": None,
+                "claim_number": None,
+                "mortgage_company": None,
+                "date_of_loss": None,
+                "date_inspected": None,
+                "risk_address": None,
+                "address_street": None,
+                "address_city": None,
+                "address_state": None,
+                "address_zip": None,
+                "dwelling_type": None,
+                "roof_material": None,
+                "roof_age": None,
+                "roof_pitch": None,
+                "roof_condition": None,
+                "front_elevation_damage": None,
+                "right_elevation_damage": None,
+                "rear_elevation_damage": None,
+                "left_elevation_damage": None,
+                "interior_damage": None,
+                "type_of_loss": None,
+                "damage_summary": None,
+                "additional_notes": text
+            }
+
+            # Extract name lines like 'Insured: <name>'
+            m = re.search(r"Insured:\s*(.+)", re.IGNORECASE)
+            if m:
+                res["insured_name"] = m.group(1).strip()
+
+            # Policy numbers often appear as 'Policy #: 12345' or 'Policy #:'
+            m = re.search(r"Policy\s*#[:]?\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+            if m:
+                res["policy_number"] = m.group(1).strip()
+
+            # Claim number common labels
+            m = re.search(r"Claim\s*#[:]?\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+            if m:
+                res["claim_number"] = m.group(1).strip()
+
+            # Date patterns mm/dd/yyyy or yyyy-mm-dd
+            m = re.search(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", text)
+            if m:
+                res["date_inspected"] = m.group(1)
+
+            # Address lines: 'Risk address' or similar
+            m = re.search(r"Risk address\s*[:\-]?\s*(.+)", text, re.IGNORECASE)
+            if m:
+                addr = m.group(1).strip()
+                res["risk_address"] = addr
+            # fallback: find street + city/state/zip lines
+            m = re.search(r"(\d+\s+[^,\n]+),\s*([A-Za-z\s]+),\s*([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?", text)
+            if m:
+                res["address_street"] = m.group(1).strip()
+                res["address_city"] = m.group(2).strip()
+                res["address_state"] = m.group(3).strip()
+                res["address_zip"] = m.group(4) if m.group(4) else None
+
+            # Return only placeholders if requested, else all
+            if placeholders:
+                return {p: res.get(p.lower(), None) for p in placeholders}
+            return res
 
     def _extract_json_from_text(self, text: str) -> Optional[str]:
         """Try to find a JSON object within arbitrary text.
@@ -242,7 +414,7 @@ class GeminiLLMHandler:
         prompt = prompt_t.substitute(data=data_str, context=context_str)
         
         try:
-            response = self.model.generate_content(prompt)
+            response = self._call_model(prompt)
             response_text = response.text or ""
             response_text = response_text.strip()
 
@@ -268,8 +440,9 @@ class GeminiLLMHandler:
                 logger.error(f"Narrative JSON parsing failed. Response: {response_text}")
                 return {}
         except Exception as e:
-            logger.error(f"Error generating narrative: {e}")
-            raise
+            # If LLM fails, log and return no narratives so upstream code continues
+            logger.warning(f"LLM narrative generation failed: {e}. Returning empty narrative set.")
+            return {}
 
     def generate_filled_template(self, template_text: str, extracted_data: Dict) -> str:
         """
@@ -301,7 +474,7 @@ class GeminiLLMHandler:
         prompt = prompt_template.substitute(template_text=template_text, data=data_json)
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self._call_model(prompt)
             response_text = response.text or ""
             # Strip code fences if any
             if response_text.startswith("```json"):
@@ -349,7 +522,7 @@ class GeminiLLMHandler:
         prompt = prompt_t.substitute(placeholders=placeholders_json, data=data_json)
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self._call_model(prompt)
             response_text = response.text or ""
             response_text = response_text.strip()
 
@@ -422,7 +595,7 @@ class GeminiLLMHandler:
         prompt = prompt_t.substitute(template_text=template_text)
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self._call_model(prompt)
             response_text = (response.text or "").strip()
             # strip code fences
             if response_text.startswith("```json"):

@@ -40,6 +40,7 @@ class DataMapper:
         self.extracted_data = extracted_data
         self.template_placeholders = template_placeholders
         self.mapping_used = {}
+        self.FIELD_BLACKLIST = {'insured', 'name', 'member'}
         logger.info(f"DataMapper initialized. Extracted keys: {sorted(list(self.extracted_data.keys()))}")
     
     def map_data(self) -> Dict[str, str]:
@@ -77,7 +78,9 @@ class DataMapper:
         if placeholder in self.DEFAULT_MAPPING:
             mapped_field = self.DEFAULT_MAPPING[placeholder]
             if mapped_field and mapped_field in self.extracted_data:
-                return self.extracted_data[mapped_field]
+                candidate = self.extracted_data[mapped_field]
+                if self._validate_candidate_for_placeholder(placeholder, candidate):
+                    return candidate
 
         # Normalization helpers
         def norm(s: str) -> str:
@@ -90,7 +93,8 @@ class DataMapper:
             if value is None:
                 continue
             if norm(key) == norm_placeholder:
-                return value
+                if self._validate_candidate_for_placeholder(placeholder, value):
+                    return value
 
         # 3) Substring matches both ways
         for key, value in self.extracted_data.items():
@@ -98,7 +102,8 @@ class DataMapper:
                 continue
             nk = norm(key)
             if nk and (nk in norm_placeholder or norm_placeholder in nk):
-                return value
+                if self._validate_candidate_for_placeholder(placeholder, value):
+                    return value
 
         # 4) Token overlap: split on common separators and match meaningful tokens
         def tokens(s: str):
@@ -119,7 +124,17 @@ class DataMapper:
                 best_key = key
 
         if best_key and best_score > 0:
-            return self.extracted_data[best_key]
+            # if placeholder is address-like, avoid matching to identity fields like insured_name
+            lower_best_key = best_key.lower()
+            if any(b in lower_best_key for b in self.FIELD_BLACKLIST) and any(x in placeholder.lower() for x in ['city', 'street', 'state', 'zip', 'address']):
+                logger.debug(f"Rejected mapping best_key {best_key} -> placeholder {placeholder} due to blacklist rules")
+            else:
+                candidate = self.extracted_data[best_key]
+                if self._validate_candidate_for_placeholder(placeholder, candidate):
+                    return candidate
+            candidate = self.extracted_data[best_key]
+            if self._validate_candidate_for_placeholder(placeholder, candidate):
+                return candidate
 
         # 5) Address parsing fallback: if placeholder expects parts and we have a full risk_address
         addr_fields = {
@@ -171,6 +186,51 @@ class DataMapper:
 
         # 6) No match found
         return None
+
+    def _validate_candidate_for_placeholder(self, placeholder: str, candidate: str) -> bool:
+        """
+        Validates candidate values against placeholder types, for safer mapping.
+        Returns True if candidate seems plausible.
+        """
+        if candidate is None:
+            return False
+        cand = str(candidate).strip()
+        if not cand:
+            return False
+
+        lower_ph = placeholder.lower()
+
+        # ZIP code: numeric 5 or 9-digit
+        if 'zip' in lower_ph:
+            return bool(re.search(r"^\d{5}(?:-\d{4})?$", cand))
+
+        # City: should contain letters and not be numeric-only
+        if 'city' in lower_ph:
+            return bool(re.search(r"[A-Za-z]", cand) and not cand.isdigit())
+
+        # State: 2-letter or words
+        if 'state' in lower_ph:
+            # 2-letter state code or normal word
+            return bool(re.search(r"^[A-Za-z]{2}$", cand) or re.search(r"[A-Za-z]", cand))
+
+        # Street: often contains digits or words like 'St', 'Ave', 'Rd'
+        if 'street' in lower_ph or 'st' in lower_ph:
+            return bool(re.search(r"\d+|street|st\.|ave|road|rd\.|lane|ln\.|drive|dr\.", cand.lower()))
+
+        # Date: simple numeric and slashes detection
+        if 'date' in lower_ph:
+            return bool(re.search(r"\d{1,4}[-/\\]\d{1,2}[-/\\]\d{1,4}", cand) or re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", cand))
+
+        # Policy/claim: alnum with hyphens
+        if 'policy' in lower_ph or 'claim' in lower_ph:
+            return True if len(cand) > 0 else False
+
+        # Name: contains non-digit and letters
+        if 'insured' in lower_ph or 'name' in lower_ph:
+            return bool(re.search(r"[A-Za-z]", cand) and not cand.isdigit())
+
+        # fallback: accept if not purely numeric or empty
+        return not cand.isdigit()
     
     def get_mapping_report(self) -> Dict:
         """
