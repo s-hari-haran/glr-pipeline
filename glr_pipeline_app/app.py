@@ -239,7 +239,13 @@ def main():
                             # Use LLM to extract data
                             with st.spinner("Analyzing with AI..."):
                                 llm = GeminiLLMHandler(api_key)
-                                st.session_state.extracted_data = llm.extract_insurance_data(combined_text)
+                                # Prefer to pass the placeholders list to the LLM so it extracts only needed keys
+                                placeholders_for_extraction = None
+                                try:
+                                    placeholders_for_extraction = sorted(list(st.session_state.template_handler.get_placeholders()))
+                                except Exception:
+                                    placeholders_for_extraction = None
+                                st.session_state.extracted_data = llm.extract_insurance_data(combined_text, placeholders_for_extraction)
                                 
                                 # Generate narratives
                                 with st.spinner("Generating narrative text..."):

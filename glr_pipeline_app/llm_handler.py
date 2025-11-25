@@ -31,7 +31,7 @@ class GeminiLLMHandler:
         self.model = genai.GenerativeModel(self.model_name)
         logger.info(f"Gemini LLM initialized using model: {self.model_name}")
     
-    def extract_insurance_data(self, photo_report_text: str) -> Dict:
+    def extract_insurance_data(self, photo_report_text: str, placeholders: Optional[List[str]] = None) -> Dict:
         """
         Extract key insurance data from photo report text.
         
@@ -43,43 +43,62 @@ class GeminiLLMHandler:
         """
         # Use string.Template to avoid interpreting braces in the prompt template
         safe_text = photo_report_text
-        prompt_t = Template("""
-        You are an insurance claims adjuster AI. Extract all relevant information from this photo report.
-        Return ONLY a valid JSON object with the following fields (use null for missing values):
-        {
-            "insured_name": "name of insured/property owner",
-            "policy_number": "policy number",
-            "claim_number": "claim number",
-            "mortgage_company": "mortgage company name if mentioned",
-            "date_of_loss": "date when damage occurred",
-            "date_inspected": "date of inspection",
-            "risk_address": "full property address",
-            "address_street": "street address",
-            "address_city": "city",
-            "address_state": "state",
-            "address_zip": "zip code",
-            "dwelling_type": "type of dwelling (1 story, 2 story, etc)",
-            "roof_material": "roof shingles/material type",
-            "roof_age": "approximate roof age in years",
-            "roof_pitch": "roof pitch (e.g., 5/12)",
-            "roof_condition": "description of roof condition",
-            "front_elevation_damage": "damage description for front",
-            "right_elevation_damage": "damage description for right side",
-            "rear_elevation_damage": "damage description for rear",
-            "left_elevation_damage": "damage description for left side",
-            "interior_damage": "description of interior damage if any",
-            "type_of_loss": "type of loss (wind, hail, etc)",
-            "damage_summary": "brief summary of all damages",
-            "additional_notes": "any other relevant information"
-        }
-        
-        Here is the photo report text:
-        
-        $text
-        
-        Return ONLY the JSON object, no other text.
-        """)
-        prompt = prompt_t.substitute(text=safe_text)
+        # If a list of placeholders is provided, ask the LLM to extract only those keys
+        if placeholders and isinstance(placeholders, list) and len(placeholders) > 0:
+            # Build a JSON schema snippet with the placeholders as keys
+            placeholder_example = ",\n".join([f'"{p}": "value or null"' for p in placeholders])
+            prompt_t = Template("""
+            You are an insurance claims adjuster AI. Extract the information from this photo report.
+            Return ONLY a valid JSON object where the keys exactly match the provided placeholders (use null for missing values):
+            {
+            $placeholders
+            }
+
+            Here is the photo report text:
+
+            $text
+
+            Return ONLY the JSON object, no other text.
+            """)
+            prompt = prompt_t.substitute(placeholders=placeholder_example, text=safe_text)
+        else:
+            prompt_t = Template("""
+            You are an insurance claims adjuster AI. Extract all relevant information from this photo report.
+            Return ONLY a valid JSON object with the following fields (use null for missing values):
+            {
+                "insured_name": "name of insured/property owner",
+                "policy_number": "policy number",
+                "claim_number": "claim number",
+                "mortgage_company": "mortgage company name if mentioned",
+                "date_of_loss": "date when damage occurred",
+                "date_inspected": "date of inspection",
+                "risk_address": "full property address",
+                "address_street": "street address",
+                "address_city": "city",
+                "address_state": "state",
+                "address_zip": "zip code",
+                "dwelling_type": "type of dwelling (1 story, 2 story, etc)",
+                "roof_material": "roof shingles/material type",
+                "roof_age": "approximate roof age in years",
+                "roof_pitch": "roof pitch (e.g., 5/12)",
+                "roof_condition": "description of roof condition",
+                "front_elevation_damage": "damage description for front",
+                "right_elevation_damage": "damage description for right side",
+                "rear_elevation_damage": "damage description for rear",
+                "left_elevation_damage": "damage description for left side",
+                "interior_damage": "description of interior damage if any",
+                "type_of_loss": "type of loss (wind, hail, etc)",
+                "damage_summary": "brief summary of all damages",
+                "additional_notes": "any other relevant information"
+            }
+            
+            Here is the photo report text:
+            
+            $text
+            
+            Return ONLY the JSON object, no other text.
+            """)
+            prompt = prompt_t.substitute(text=safe_text)
         
         try:
             response = self.model.generate_content(prompt)

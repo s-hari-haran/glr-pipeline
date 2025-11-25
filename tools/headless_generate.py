@@ -60,18 +60,30 @@ def main():
     create_sample_template(template_path)
     print('Created template at', template_path)
 
-    # Initialize handlers
+    # Initialize LLM handler and template handler
     llm = GeminiLLMHandler(api_key)
-    print('Extracting data from photo report...')
-    extracted = llm.extract_insurance_data(example_text)
+
+    # Load template handler
+    th = DocxTemplateHandler(template_path)
+
+    # Try LLM-based placeholder extraction for testing and use them in the extraction prompt
+    placeholders = sorted(list(th.get_placeholders()))
+    try:
+        llm_placeholders = llm.extract_template_placeholders(th.get_template_text())
+        print('LLM placeholders (extracted):', llm_placeholders)
+        if llm_placeholders:
+            placeholders = llm_placeholders
+    except Exception as e:
+        print('LLM placeholder extraction failed:', e)
+
+    # Use placeholders to focus LLM extraction of structured data
+    print('Extracting data from photo report (focused on placeholders)...')
+    extracted = llm.extract_insurance_data(example_text, placeholders)
     print('Extracted keys:', list(extracted.keys()))
 
     print('Generating narratives...')
     narratives = llm.generate_narrative(extracted)
     extracted.update(narratives)
-
-    # Load template handler
-    th = DocxTemplateHandler(template_path)
 
     # Try LLM-based placeholder extraction for testing
     try:

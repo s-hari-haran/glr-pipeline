@@ -77,22 +77,10 @@ Examples:
         pdf_text = extract_text_from_pdf(str(pdf_path))
         print(f"✓ Extracted {len(pdf_text)} characters from PDF")
         
-        # Step 2: Extract structured data using LLM
-        print("\n🤖 Step 2: Extracting structured data with AI...")
-        llm = GeminiLLMHandler(api_key)
-        extracted_data = llm.extract_insurance_data(pdf_text)
-        print("✓ Data extraction complete")
-        print("\nExtracted Data:")
-        for key, value in extracted_data.items():
-            if value:
-                print(f"  {key}: {value}")
-        
-        # Step 3: Load template and get placeholders
-        print("\n📋 Step 3: Processing template...")
+        # Step 2: Load template and get placeholders (run LLM-based placeholder extraction first if available)
+        print("\n📋 Step 2: Processing template and extracting placeholders...")
         template_handler = DocxTemplateHandler(str(template_path))
         placeholders = template_handler.get_placeholders()
-        # If we have an API key, attempt LLM-based placeholder extraction for templates
-        api_key = os.getenv("GOOGLE_API_KEY")
         if api_key:
             try:
                 llm = GeminiLLMHandler(api_key)
@@ -105,8 +93,21 @@ Examples:
                     print("ℹ️ LLM didn't return placeholders; falling back to template detection.")
             except Exception as e:
                 print(f"ℹ️ LLM placeholder extraction failed: {e}. Using template detection.")
+
         print(f"✓ Found {len(placeholders)} placeholders in template")
         print(f"  Placeholders: {', '.join(list(placeholders)[:5])}{'...' if len(placeholders) > 5 else ''}")
+
+        # Step 3: Extract structured data using LLM, passing placeholders
+        print("\n🤖 Step 3: Extracting structured data with AI (focused on placeholders)...")
+        llm = GeminiLLMHandler(api_key)
+        extracted_data = llm.extract_insurance_data(pdf_text, list(placeholders) if placeholders else None)
+        print("✓ Data extraction complete")
+        print("\nExtracted Data:")
+        for key, value in extracted_data.items():
+            if value:
+                print(f"  {key}: {value}")
+        
+        # (Template step moved earlier in this flow)
         
         # Step 4: Map extracted data to template placeholders
         print("\n🔗 Step 4: Mapping data to template...")
